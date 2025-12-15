@@ -1,0 +1,5 @@
+{
+  "name": "Game On!",
+  "description": "A modern, minimalistic scheduling app for Padel games featuring a dashboard with calendar, weather, and upcoming game lists.",
+  "requestFramePermissions": []
+}
