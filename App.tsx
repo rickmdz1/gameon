@@ -9,7 +9,7 @@ import { MOCK_WEATHER } from './constants';
 import { getWeatherForecast } from './weatherService';
 import { Game, Player, WeatherForecast } from './types';
 import { supabase } from './supabaseClient';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Lock } from 'lucide-react';
 
 const App: React.FC = () => {
   const [games, setGames] = useState<Game[]>([]);
@@ -37,7 +37,7 @@ const App: React.FC = () => {
         if (error) throw error;
         
         if (session?.user) {
-          fetchProfile(session.user.id);
+          fetchProfile(session.user.id, session.user.user_metadata);
         } else {
           setUser(null);
         }
@@ -49,7 +49,7 @@ const App: React.FC = () => {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) {
-        fetchProfile(session.user.id);
+        fetchProfile(session.user.id, session.user.user_metadata);
         if (viewMode === 'auth') setViewMode('none');
       } else {
         setUser(null);
@@ -70,7 +70,7 @@ const App: React.FC = () => {
     fetchWeather();
   }, []);
 
-  const fetchProfile = async (userId: string) => {
+  const fetchProfile = async (userId: string, metadata?: any) => {
     try {
         const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
         
@@ -85,12 +85,14 @@ const App: React.FC = () => {
                 phone: data.phone 
             });
         } else {
-             // Fallback for new users: Attempt to create a profile row so joins work
-             const defaultName = 'New Player';
+             // Fallback for new users: Use metadata if available, else default
+             const defaultName = metadata?.full_name || 'New Player';
+             const defaultPhone = metadata?.phone || null;
+
              const { error: insertError } = await supabase.from('profiles').insert({
                  id: userId,
                  full_name: defaultName,
-                 // Optional: Set a default avatar or let it be null
+                 phone: defaultPhone
              });
 
              if (insertError) {
@@ -100,6 +102,7 @@ const App: React.FC = () => {
              setUser({ 
                 id: userId, 
                 name: defaultName, 
+                phone: defaultPhone
              });
         }
     } catch (err) {
@@ -111,14 +114,16 @@ const App: React.FC = () => {
     if (!user) return;
     
     try {
-      // Use upsert to ensure profile exists even if it was missing before
+      // Clean phone number: remove non-digits. If empty, set to null.
+      const cleanedPhone = updatedData.phone.replace(/\D/g, '');
+      const phoneValue = cleanedPhone === '' ? null : cleanedPhone;
+
       const { error } = await supabase
           .from('profiles')
           .upsert({ 
               id: user.id,
               full_name: updatedData.name,
-              phone: updatedData.phone,
-              updated_at: new Date().toISOString()
+              phone: phoneValue
           });
 
       if (error) throw error;
@@ -135,6 +140,14 @@ const App: React.FC = () => {
   }, [user]); 
 
   const fetchGames = async (isBackground = false) => {
+    // If no user, we don't fetch (or we fetch but won't show). 
+    // Requirement: Don't show games if not logged in.
+    if (!user) {
+      setGames([]);
+      setLoading(false);
+      return;
+    }
+
     if (!isBackground) setLoading(true);
     setErrorMsg(null);
 
@@ -157,7 +170,6 @@ const App: React.FC = () => {
 
         if (gamesData) {
           const formattedGames: Game[] = gamesData.map((g: any) => {
-            // Robust parsing for alternative_times
             let alternativeTimes: string[] = [];
             if (Array.isArray(g.alternative_times)) {
                 alternativeTimes = g.alternative_times;
@@ -168,24 +180,12 @@ const App: React.FC = () => {
                 } catch {
                     const cleaned = g.alternative_times.replace(/^\{|\}$/g, '');
                     if (cleaned) {
-                        alternativeTimes = cleaned.split(',').map(t => t.replace(/"/g, '').trim());
+                        alternativeTimes = cleaned.split(',').map((t: string) => t.replace(/"/g, '').trim());
                     }
                 }
             }
 
-            return {
-              id: g.id,
-              date: new Date(g.date),
-              time: g.time,
-              duration: g.duration,
-              type: g.type,
-              location: g.location,
-              status: g.status || 'scheduled',
-              creatorId: g.creator_id,
-              note: g.note,
-              alternative_times: alternativeTimes,
-              is_tentative: g.is_tentative,
-              players: g.game_participants ? g.game_participants
+            const players = g.game_participants ? g.game_participants
                   .sort((a: any, b: any) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime())
                   .map((gp: any) => {
                      const profileData = gp.profiles;
@@ -200,11 +200,59 @@ const App: React.FC = () => {
                       note: gp.note,
                       voted_time: gp.voted_time 
                      };
-                  }) : []
+                  }) : [];
+
+            // AUTO-CONFIRMATION LOGIC (Client-Side)
+            // If the DB hasn't updated yet or RLS prevents it, we calculate the status locally
+            // to ensure the UI reflects "Confirmed! Game On!" when conditions are met.
+            let status = g.status || 'scheduled';
+            let isTentative = g.is_tentative;
+            let displayTime = g.time;
+
+            if (status !== 'confirmed') {
+                if (isTentative && alternativeTimes.length > 0) {
+                     // Check voting
+                     const voteCounts: Record<string, number> = {};
+                     players.forEach((p: Player) => {
+                         if (p.voted_time) voteCounts[p.voted_time] = (voteCounts[p.voted_time] || 0) + 1;
+                     });
+
+                     const allTimes = [displayTime, ...alternativeTimes];
+                     // Dedupe just in case
+                     const candidates = [...new Set(allTimes)];
+
+                     for (const t of candidates) {
+                         if ((voteCounts[t] || 0) >= 4) {
+                             status = 'confirmed';
+                             isTentative = false;
+                             displayTime = t;
+                             break;
+                         }
+                     }
+                } else {
+                     // Standard Game
+                     if (players.length >= 4) {
+                         status = 'confirmed';
+                     }
+                }
+            }
+
+            return {
+              id: g.id,
+              date: new Date(g.date),
+              time: displayTime,
+              duration: g.duration,
+              type: g.type,
+              location: g.location,
+              status: status,
+              creatorId: g.creator_id,
+              note: g.note,
+              alternative_times: alternativeTimes,
+              is_tentative: isTentative,
+              players: players
             };
           });
           
-          // Filter out games with 0 players (cancelled/abandoned but not fully deleted)
           const activeGames = formattedGames.filter(g => g.players.length > 0);
           setGames(activeGames);
         }
@@ -218,17 +266,17 @@ const App: React.FC = () => {
   };
 
   const handleDateClick = (date: Date) => {
+    if (!user) {
+        setViewMode('auth');
+        return;
+    }
     const dayGames = games.filter(g => isSameDay(g.date, date));
     setSelectedDate(date);
     
     if (dayGames.length > 0) {
       setViewMode('viewDay');
     } else {
-      if (!user) {
-        setViewMode('auth');
-      } else {
-        setViewMode('new');
-      }
+      setViewMode('new');
     }
   };
 
@@ -306,7 +354,13 @@ const App: React.FC = () => {
       if (updates.location) dbUpdates.location = updates.location;
       if (updates.note !== undefined) dbUpdates.note = updates.note;
       
-      // Removed check for creator_id here to allow new host (second player) to update if RLS permits
+      // Update logic for alternative times
+      if (updates.alternative_times !== undefined) {
+         dbUpdates.alternative_times = updates.alternative_times;
+         // If we are updating alt times, we re-evaluate tentative status
+         dbUpdates.is_tentative = updates.alternative_times.length > 0;
+      }
+      
       const { error } = await supabase
         .from('games')
         .update(dbUpdates)
@@ -353,47 +407,66 @@ const App: React.FC = () => {
       
       if (error) throw error;
 
-      const { data: gameData, error: fetchError } = await supabase
+      // --- CHECK FOR CONFIRMATION (4 PLAYERS) ---
+      // Attempt to persist the status update in the DB.
+      // Even if this fails (e.g. RLS), the fetchGames logic will handle the UI update.
+      const { data: gameData } = await supabase
         .from('games')
-        .select(`*, game_participants(user_id, voted_time)`)
+        .select(`*, game_participants(voted_time)`)
         .eq('id', gameId)
         .single();
-        
-      if (!fetchError && gameData) {
+
+      if (gameData && gameData.status !== 'confirmed') {
           const participants = gameData.game_participants || [];
-          const playersCount = participants.length;
-          
-          if (gameData.is_tentative) {
+          let shouldConfirm = false;
+          let winningTime = gameData.time;
+
+          // Normalize alt times
+          let alternativeTimes: string[] = [];
+          if (Array.isArray(gameData.alternative_times)) {
+              alternativeTimes = gameData.alternative_times;
+          } else if (typeof gameData.alternative_times === 'string') {
+              try {
+                  const parsed = JSON.parse(gameData.alternative_times);
+                  if (Array.isArray(parsed)) alternativeTimes = parsed;
+              } catch {
+                   const cleaned = gameData.alternative_times.replace(/^\{|\}$/g, '');
+                   if (cleaned) alternativeTimes = cleaned.split(',').map((t: string) => t.replace(/"/g, '').trim());
+              }
+          }
+
+          if (gameData.is_tentative && alternativeTimes.length > 0) {
+              // Voting Logic
               const voteCounts: Record<string, number> = {};
               participants.forEach((p: any) => {
-                  if (p.voted_time) {
-                      voteCounts[p.voted_time] = (voteCounts[p.voted_time] || 0) + 1;
-                  }
+                  if (p.voted_time) voteCounts[p.voted_time] = (voteCounts[p.voted_time] || 0) + 1;
               });
 
-              let winningTime = null;
-              for (const [time, count] of Object.entries(voteCounts)) {
-                  if (count >= 4) {
-                      winningTime = time;
+              const candidates = [...new Set([gameData.time, ...alternativeTimes])];
+              
+              for (const t of candidates) {
+                  if ((voteCounts[t] || 0) >= 4) {
+                      shouldConfirm = true;
+                      winningTime = t;
                       break;
                   }
               }
-
-              if (winningTime) {
-                  await supabase.from('games').update({
-                      status: 'confirmed',
-                      time: winningTime, 
-                      is_tentative: false
-                  }).eq('id', gameId);
-              }
           } else {
-              if (playersCount >= 4 && gameData.status !== 'confirmed') {
-                  await supabase.from('games').update({
-                      status: 'confirmed'
-                  }).eq('id', gameId);
+              // Standard Logic
+              if (participants.length >= 4) {
+                  shouldConfirm = true;
               }
           }
+
+          if (shouldConfirm) {
+              await supabase.from('games').update({
+                  status: 'confirmed',
+                  is_tentative: false,
+                  time: winningTime
+              }).eq('id', gameId);
+          }
       }
+      // ------------------------------------------
 
       await fetchGames(true);
     } catch (error: any) {
@@ -418,7 +491,6 @@ const App: React.FC = () => {
 
       if (isCreator) {
           const participants = gameData.game_participants || [];
-          // Ensure sorted order to reliably find "second" player
           participants.sort((a: any, b: any) => 
             new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()
           );
@@ -427,23 +499,15 @@ const App: React.FC = () => {
 
           if (remainingPlayers.length > 0) {
               const newOwnerId = remainingPlayers[0].user_id;
-              
-              // Attempt ownership transfer in DB. If this fails due to RLS, we catch it 
-              // but continue with the leave process so the user isn't stuck.
-              // The frontend UI will handle "Soft Ownership" based on player order.
               try {
                   const { error: updateError } = await supabase
                       .from('games')
                       .update({ creator_id: newOwnerId })
                       .eq('id', gameId);
-
-                  if (updateError) {
-                       console.warn("Soft Transfer: Database ownership update skipped (likely RLS restricted).", updateError.message);
-                  }
+                  if (updateError) console.warn("Soft Transfer skipped (RLS).");
               } catch (transferErr) {
-                   console.warn("Soft Transfer: Error during ownership transfer attempt.", transferErr);
+                   console.warn("Soft Transfer Error", transferErr);
               }
-
           } else {
               await handleCancelGame(gameId);
               return;
@@ -467,25 +531,9 @@ const App: React.FC = () => {
 
   const handleCancelGame = async (gameId: string) => {
     if (!user) return;
-    
     try {
-      // First, attempt to remove all participants.
-      // RLS note: This might fail for non-creators if they can't delete other users' rows.
-      // However, we proceed to attempt game deletion.
       await supabase.from('game_participants').delete().eq('game_id', gameId);
-      
-      // Attempt to delete the game row
-      const { error } = await supabase.from('games').delete().eq('id', gameId);
-      
-      if (error) {
-         console.warn("Backend delete failed (likely RLS), but UI will hide empty game.", error.message);
-         // If we failed to delete the game row, it might still have 0 participants if that delete worked.
-         // If it has 0 participants, fetchGames() will filter it out.
-         // If participants were NOT deleted (due to RLS), the game will remain. 
-         // In that case, we can't do much without backend changes, but we try our best.
-      }
-
-      // Optimistically remove from local state
+      await supabase.from('games').delete().eq('id', gameId);
       setGames(prevGames => prevGames.filter(g => g.id !== gameId));
       setViewMode('none');
       setSelectedGameId(null);
@@ -523,19 +571,40 @@ const App: React.FC = () => {
       />
       
       <main className="max-w-7xl mx-auto flex flex-col lg:flex-row gap-8 p-4 lg:p-8">
-        <aside className="w-full lg:w-80 flex flex-col gap-6 shrink-0">
-          <MiniCalendar 
-            onDateClick={handleDateClick} 
-            games={games}
-          />
-          <WeatherWidget forecasts={weatherForecasts} />
+        {/* Aside: Calendar and Weather. Side-by-side on mobile/tablet (flex-row), stacked on desktop (lg:flex-col) */}
+        <aside className="w-full lg:w-80 flex flex-row flex-wrap lg:flex-col gap-6 shrink-0 justify-center lg:justify-start">
+          <div className="w-full sm:w-auto lg:w-full flex justify-center">
+             <MiniCalendar 
+               onDateClick={handleDateClick} 
+               games={games}
+             />
+          </div>
+          <div className="w-full sm:w-auto lg:w-full flex justify-center">
+             <WeatherWidget forecasts={weatherForecasts} />
+          </div>
         </aside>
 
-        <div className="flex-1 bg-white rounded-[2.5rem] p-6 lg:p-10 shadow-sm min-h-[800px]">
+        <div className="flex-1 bg-white rounded-[2.5rem] p-6 lg:p-10 shadow-sm min-h-[600px] lg:min-h-[800px]">
           {errorMsg ? (
               <div className="h-full flex items-center justify-center text-slate-400">
                   <p>{errorMsg}</p>
               </div>
+          ) : !user ? (
+            <div className="flex flex-col items-center justify-center h-full text-center p-8 animate-in fade-in duration-500">
+                <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center mb-6 text-slate-300">
+                   <Lock className="w-10 h-10" />
+                </div>
+                <h3 className="text-2xl font-bold text-slate-800 mb-2">Member Access Only</h3>
+                <p className="text-slate-500 max-w-md mb-8">
+                   Please sign in to view the schedule, join matches, and see who is playing.
+                </p>
+                <button 
+                    onClick={() => setViewMode('auth')} 
+                    className="bg-blue-900 text-white font-bold py-3 px-8 rounded-xl hover:bg-blue-800 transition-transform active:scale-95 shadow-lg shadow-blue-900/20"
+                >
+                    Sign In to Game On!
+                </button>
+            </div>
           ) : (
             <ScheduleList 
                 games={games} 

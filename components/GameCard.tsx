@@ -1,6 +1,6 @@
 import React from 'react';
 import { Game } from '../types';
-import { Clock, CheckCircle2, ThumbsUp } from 'lucide-react';
+import { Clock, CheckCircle2, ThumbsUp, Vote } from 'lucide-react';
 
 interface GameCardProps {
   game: Game;
@@ -9,14 +9,11 @@ interface GameCardProps {
 }
 
 const GameCard: React.FC<GameCardProps> = ({ game, isWeekend, onClick }) => {
-  // Styles based on the image description and weekend highlight request.
-  // Using Yellow for Saturday/Sunday active cards to pop.
   const cardBg = isWeekend ? 'bg-yellow-400' : 'bg-white';
   const textColor = isWeekend ? 'text-blue-900' : 'text-slate-800';
   const subTextColor = isWeekend ? 'text-blue-800' : 'text-slate-500';
   const playerTextColor = isWeekend ? 'text-blue-900' : 'text-slate-600';
   
-  // Logic to determine display state
   const hasAlternatives = game.alternative_times && game.alternative_times.length > 0;
   const isVoting = game.is_tentative && hasAlternatives;
   
@@ -36,9 +33,17 @@ const GameCard: React.FC<GameCardProps> = ({ game, isWeekend, onClick }) => {
           {game.time}
         </span>
         {isVoting && (
-           <span className="text-xs font-bold text-orange-500 bg-orange-50 px-2 py-0.5 rounded-full w-fit mt-1">
-             Voting
-           </span>
+            <div className="flex flex-col items-start gap-1 mt-1">
+                 <span className="text-[10px] font-bold text-orange-500 bg-orange-50 px-2 py-0.5 rounded-full w-fit flex items-center gap-1 border border-orange-100">
+                    <Vote className="w-2 h-2" /> Voting
+                 </span>
+                 {/* Show alternative times briefly */}
+                 {game.alternative_times?.map((t, idx) => (
+                    <span key={idx} className="text-xs text-slate-400 font-medium pl-1">
+                        {t}
+                    </span>
+                 ))}
+            </div>
         )}
       </div>
 
@@ -54,7 +59,7 @@ const GameCard: React.FC<GameCardProps> = ({ game, isWeekend, onClick }) => {
             {isConfirmed && (
                 <div className="flex items-center gap-1 bg-green-100 text-green-700 px-2 py-0.5 rounded-full text-xs font-bold">
                     <CheckCircle2 className="w-3 h-3" />
-                    Confirmed
+                    Confirmed! Game On!
                 </div>
             )}
             {showPlayerStatus && (

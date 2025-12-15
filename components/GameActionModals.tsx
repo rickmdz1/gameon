@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { format, isSameDay } from 'date-fns';
-import { X, Clock, MapPin, Trophy, Calendar as CalendarIcon, Check, LogOut, User as UserIcon, Sun, Cloud, CloudRain, CloudSun, Trash2, Loader2, Edit2, Save, StickyNote, MessageSquare, Plus, Vote, Mail, Lock, CheckCircle2, Users, AlertCircle, ThumbsUp } from 'lucide-react';
+import { X, Clock, MapPin, Trophy, Calendar as CalendarIcon, Check, LogOut, User as UserIcon, Sun, Cloud, CloudRain, CloudSun, Trash2, Loader2, Edit2, Save, StickyNote, MessageSquare, Plus, Vote, Mail, Lock, CheckCircle2, Users, AlertCircle, ThumbsUp, Phone } from 'lucide-react';
 import { Game, Player, WeatherForecast } from '../types';
 import { supabase } from '../supabaseClient';
 
@@ -298,7 +298,10 @@ export const ViewGameModal: React.FC<ViewGameModalProps> = ({ isOpen, onClose, g
                         <div className="flex items-center gap-2">
                             <h4 className="font-bold text-slate-800 text-lg">{game.type}</h4>
                             {isConfirmed && (
-                                <CheckCircle2 className="w-4 h-4 text-green-600" />
+                                <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                                    <CheckCircle2 className="w-3 h-3" />
+                                    Confirmed! Game On!
+                                </span>
                             )}
                             {showPlayerStatus && (
                                 <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-bold flex items-center gap-1 border border-blue-200">
@@ -311,8 +314,17 @@ export const ViewGameModal: React.FC<ViewGameModalProps> = ({ isOpen, onClose, g
                             {game.location}
                         </div>
                     </div>
-                    <div className="bg-white px-3 py-1 rounded-lg text-sm font-bold text-blue-900 shadow-sm border border-slate-100">
-                        {game.time}
+                    <div className="flex flex-col items-end">
+                        <div className="bg-white px-3 py-1 rounded-lg text-sm font-bold text-blue-900 shadow-sm border border-slate-100">
+                            {game.time}
+                        </div>
+                        {isVoting && (
+                            <div className="flex gap-1 mt-1">
+                                {game.alternative_times?.slice(0, 2).map((t, i) => (
+                                    <span key={i} className="text-[10px] text-slate-400">{t}</span>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 </div>
                 
@@ -376,6 +388,7 @@ export const GameDetailsModal: React.FC<GameDetailsModalProps> = ({ isOpen, onCl
     // Edit Game Form State
     const [editDate, setEditDate] = useState('');
     const [editTime, setEditTime] = useState('');
+    const [editAltTimes, setEditAltTimes] = useState<string[]>([]);
     const [editDuration, setEditDuration] = useState(120);
     const [editType, setEditType] = useState('');
     const [editLocation, setEditLocation] = useState('');
@@ -386,6 +399,7 @@ export const GameDetailsModal: React.FC<GameDetailsModalProps> = ({ isOpen, onCl
             // Setup Game Edit State
             setEditDate(format(game.date, 'yyyy-MM-dd'));
             setEditTime(game.time);
+            setEditAltTimes(game.alternative_times || []);
             setEditDuration(game.duration);
             setEditType(game.type);
             setEditLocation(game.location);
@@ -405,21 +419,12 @@ export const GameDetailsModal: React.FC<GameDetailsModalProps> = ({ isOpen, onCl
     if (!game) return null;
 
     // Determine Host based on first player in the list
-    // This supports "Soft Ownership" if DB creator_id cannot be updated due to RLS.
-    // The first player joined is considered the host.
-    const sortedPlayers = [...game.players]; // Already sorted by join time in App.tsx
+    const sortedPlayers = [...game.players]; 
     const hostPlayer = sortedPlayers.length > 0 ? sortedPlayers[0] : null;
-    
-    // Am I the host?
     const isHost = currentUser && hostPlayer && hostPlayer.id === currentUser.id;
-    
     const isJoined = currentUser && game.players.some(p => p.id === currentUser.id);
     const canTransferOwnership = isHost && game.players.length >= 2;
-    
-    // Find who will be the new owner (2nd player) if current creator leaves
-    // This is purely for display text
     const nextOwner = canTransferOwnership ? game.players.find(p => p.id !== currentUser?.id) : null;
-    
     const weather = weatherForecasts?.find(w => isSameDay(w.date, game.date));
 
     const WeatherIcon = ({ condition }: { condition: string }) => {
@@ -437,9 +442,13 @@ export const GameDetailsModal: React.FC<GameDetailsModalProps> = ({ isOpen, onCl
         const [y, m, d] = editDate.split('-').map(Number);
         const newDate = new Date(y, m - 1, d); 
 
+        // Filter valid alt times
+        const uniqueAltTimes = [...new Set(editAltTimes.filter(t => t && t !== editTime))];
+
         await onUpdateGame(game.id, {
             date: newDate,
             time: editTime,
+            alternative_times: uniqueAltTimes,
             duration: editDuration,
             type: editType,
             location: editLocation,
@@ -460,9 +469,24 @@ export const GameDetailsModal: React.FC<GameDetailsModalProps> = ({ isOpen, onCl
         setLeaving(true);
         await onLeave(game.id);
         setLeaving(false);
-        // We DO NOT close the modal. This allows the user to see the updated state 
-        // (i.e. they are no longer the owner or joined, and can rejoin if they want).
-        // If the game was cancelled (because they were the only player), App.tsx handles closing via state update or unmount.
+    };
+
+    // Helper functions for editing alt times
+    const handleAddEditAltTime = () => {
+        if (editAltTimes.length < 2) {
+            setEditAltTimes([...editAltTimes, '14:00']);
+        }
+    };
+
+    const handleEditAltTimeChange = (index: number, val: string) => {
+        const newTimes = [...editAltTimes];
+        newTimes[index] = val;
+        setEditAltTimes(newTimes);
+    };
+
+    const handleRemoveEditAltTime = (index: number) => {
+        const newTimes = editAltTimes.filter((_, i) => i !== index);
+        setEditAltTimes(newTimes);
     };
 
     if (isEditing) {
@@ -476,9 +500,36 @@ export const GameDetailsModal: React.FC<GameDetailsModalProps> = ({ isOpen, onCl
                             <input type="date" value={editDate} onChange={(e) => setEditDate(e.target.value)} className="w-full p-2 border rounded-lg bg-slate-50" />
                         </div>
                         <div className="space-y-1">
-                            <label className="text-xs font-bold text-slate-500 uppercase">Time</label>
+                            <label className="text-xs font-bold text-slate-500 uppercase">Primary Time</label>
                             <input type="time" value={editTime} onChange={(e) => setEditTime(e.target.value)} className="w-full p-2 border rounded-lg bg-slate-50" />
                         </div>
+                    </div>
+
+                    {/* Alt Times */}
+                    <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-500 uppercase">Alternative Times (Voting)</label>
+                        {editAltTimes.map((at, idx) => (
+                            <div key={idx} className="flex items-center gap-2">
+                                <input 
+                                    type="time" 
+                                    value={at}
+                                    onChange={(e) => handleEditAltTimeChange(idx, e.target.value)}
+                                    className="flex-1 p-2 border rounded-lg bg-slate-50 text-sm"
+                                />
+                                <button type="button" onClick={() => handleRemoveEditAltTime(idx)} className="p-2 text-red-500 bg-red-50 rounded-lg">
+                                    <X className="w-4 h-4" />
+                                </button>
+                            </div>
+                        ))}
+                        {editAltTimes.length < 2 && (
+                            <button 
+                                type="button" 
+                                onClick={handleAddEditAltTime}
+                                className="text-xs font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                            >
+                                <Plus className="w-3 h-3" /> Add Alternative Time
+                            </button>
+                        )}
                     </div>
 
                     {/* Duration */}
@@ -551,21 +602,15 @@ export const GameDetailsModal: React.FC<GameDetailsModalProps> = ({ isOpen, onCl
 
     const availableTimes = [game.time, ...(game.alternative_times || [])];
     const hasMultipleTimes = availableTimes.length > 1;
-    // Determine if we should show voting UI. 
-    // It's strictly for when the game is tentative AND there are actual alternatives to choose from.
     const showVoting = game.is_tentative && hasMultipleTimes;
 
-    // Count votes for each time
     const votes = availableTimes.reduce((acc, t) => {
         acc[t] = game.players.filter(p => p.voted_time === t).length;
         return acc;
     }, {} as Record<string, number>);
     
-    // Find my voted time
     const myVote = currentUser ? game.players.find(p => p.id === currentUser.id)?.voted_time : null;
 
-    // Logic for "Thumbs up" banner
-    // Only show if NOT voting, NOT confirmed, and NOT full
     const isFull = game.players.length >= 4;
     const isConfirmed = game.status === 'confirmed' || (!showVoting && isFull);
     const showPlayerAlert = !showVoting && !isConfirmed;
@@ -588,7 +633,10 @@ export const GameDetailsModal: React.FC<GameDetailsModalProps> = ({ isOpen, onCl
                     <h2 className="text-2xl font-bold text-slate-800 flex items-center justify-center gap-2">
                         {game.type}
                         {isConfirmed && (
-                            <CheckCircle2 className="w-6 h-6 text-green-500" />
+                            <span className="text-sm bg-green-100 text-green-700 px-2 py-1 rounded-full font-bold flex items-center gap-1">
+                                <CheckCircle2 className="w-4 h-4" />
+                                Confirmed! Game On!
+                            </span>
                         )}
                     </h2>
                     <p className="text-slate-500 font-medium">{format(game.date, 'EEEE, MMMM do, yyyy')}</p>
@@ -870,6 +918,10 @@ export const AuthModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  // New State for Signup fields
+  const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
+  
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -880,9 +932,19 @@ export const AuthModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
 
     try {
       if (isSignUp) {
+        // Sanitize phone if provided
+        const cleanedPhone = phone.replace(/\D/g, '');
+        const phoneValue = cleanedPhone === '' ? null : cleanedPhone;
+        
         const { error } = await supabase.auth.signUp({
           email,
           password,
+          options: {
+            data: {
+              full_name: name,
+              phone: phoneValue
+            }
+          }
         });
         if (error) throw error;
         alert("If this is a new account, please check your email for a confirmation link.");
@@ -911,6 +973,39 @@ export const AuthModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
             <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg flex items-center gap-2">
                 <AlertCircle className="w-4 h-4" />
                 {error}
+            </div>
+        )}
+
+        {isSignUp && (
+            <div className="space-y-1 animate-in fade-in slide-in-from-top-2">
+                <label className="text-xs font-bold text-slate-500 uppercase">Full Name</label>
+                <div className="relative">
+                    <UserIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <input 
+                        type="text" 
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
+                        placeholder="John Doe"
+                        required
+                    />
+                </div>
+            </div>
+        )}
+
+        {isSignUp && (
+            <div className="space-y-1 animate-in fade-in slide-in-from-top-2">
+                <label className="text-xs font-bold text-slate-500 uppercase">Phone (Optional)</label>
+                <div className="relative">
+                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <input 
+                        type="tel" 
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
+                        placeholder="For game notifications"
+                    />
+                </div>
             </div>
         )}
         
