@@ -930,6 +930,7 @@ interface AuthModalProps {
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -945,6 +946,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
             const { data, error } = await supabase.auth.signUp({
                 email,
                 password,
+                options: {
+                    data: {
+                        full_name: name,
+                    }
+                }
             });
             if (error) throw error;
             // Check if user needs to confirm email (session might be null)
@@ -989,6 +995,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
           
           {error && <div className="p-3 bg-red-50 text-red-600 text-sm rounded-xl border border-red-100">{error}</div>}
           
+          {isSignUp && (
+             <div className="space-y-1 animate-in fade-in slide-in-from-top-2 duration-300">
+                 <label className="text-xs font-bold text-slate-500 uppercase">Full Name</label>
+                 <div className="relative">
+                    <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <input 
+                        type="text" 
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:ring-2 focus:ring-blue-500 transition-all"
+                        placeholder="John Doe"
+                        required={isSignUp}
+                    />
+                 </div>
+             </div>
+          )}
+
           <div className="space-y-1">
              <label className="text-xs font-bold text-slate-500 uppercase">Email Address</label>
              <div className="relative">

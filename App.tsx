@@ -29,7 +29,7 @@ const App: React.FC = () => {
   // Derived state: Get the latest game object from the list using the ID
   const selectedGame = selectedGameId ? games.find(g => g.id === selectedGameId) || null : null;
 
-  // Handle Auth State Changes
+  // Handle Auth State Changes - Runs once on mount
   useEffect(() => {
     const checkUser = async () => {
       try {
@@ -50,14 +50,20 @@ const App: React.FC = () => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) {
         fetchProfile(session.user.id, session.user.user_metadata);
-        if (viewMode === 'auth') setViewMode('none');
       } else {
         setUser(null);
       }
     });
 
     return () => subscription.unsubscribe();
-  }, [viewMode]);
+  }, []);
+
+  // Separate effect to close auth modal when user logs in
+  useEffect(() => {
+    if (user && viewMode === 'auth') {
+      setViewMode('none');
+    }
+  }, [user, viewMode]);
 
   // Fetch Weather
   useEffect(() => {
@@ -139,6 +145,18 @@ const App: React.FC = () => {
     } catch (error: any) {
       console.error("Profile update failed:", error.message);
       alert("Failed to update profile: " + error.message);
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch (error) {
+      console.error("Error signing out:", error);
+    } finally {
+      // Force UI update to logged out state regardless of API result
+      setUser(null);
+      setViewMode('none');
     }
   };
 
@@ -628,6 +646,7 @@ const App: React.FC = () => {
         user={user} 
         onSignInClick={() => setViewMode('auth')} 
         onProfileClick={() => setViewMode('profile')}
+        onSignOutClick={handleSignOut}
       />
       
       <main className="max-w-7xl mx-auto flex flex-col lg:flex-row gap-8 p-4 lg:p-8">

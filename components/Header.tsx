@@ -7,13 +7,10 @@ interface HeaderProps {
   user: Player | null;
   onSignInClick?: () => void;
   onProfileClick?: () => void;
+  onSignOutClick?: () => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ user, onSignInClick, onProfileClick }) => {
-  const handleSignOut = async () => {
-    await supabase.auth.signOut();
-  };
-
+const Header: React.FC<HeaderProps> = ({ user, onSignInClick, onProfileClick, onSignOutClick }) => {
   return (
     <header className="w-full py-6 px-8 flex items-center justify-between bg-white/50 backdrop-blur-sm sticky top-0 z-10">
       <h1 className="text-3xl font-extrabold text-blue-950 tracking-tight">GAME ON!</h1>
@@ -36,7 +33,7 @@ const Header: React.FC<HeaderProps> = ({ user, onSignInClick, onProfileClick }) 
                 </button>
                 
                 <button 
-                    onClick={handleSignOut}
+                    onClick={onSignOutClick}
                     className="p-2 bg-white hover:bg-red-50 text-slate-400 hover:text-red-500 rounded-full border border-slate-100 transition-colors"
                     title="Sign Out"
                 >
