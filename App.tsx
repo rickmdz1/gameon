@@ -82,7 +82,7 @@ const App: React.FC = () => {
                 id: data.id, 
                 name: data.full_name || 'Player', 
                 avatar: data.avatar_url,
-                phone: data.phone 
+                phone: data.phone ? String(data.phone) : undefined 
             });
         } else {
              // Fallback for new users: Use metadata if available, else default
@@ -102,7 +102,7 @@ const App: React.FC = () => {
              setUser({ 
                 id: userId, 
                 name: defaultName, 
-                phone: defaultPhone
+                phone: defaultPhone ? String(defaultPhone) : undefined
              });
         }
     } catch (err) {
@@ -110,21 +110,29 @@ const App: React.FC = () => {
     }
   };
 
-  const handleUpdateProfile = async (updatedData: { name: string; phone: string }) => {
+  const handleUpdateProfile = async (updatedData: { name: string; phone: string; avatar?: string }) => {
     if (!user) return;
     
     try {
       // Clean phone number: remove non-digits. If empty, set to null.
-      const cleanedPhone = updatedData.phone.replace(/\D/g, '');
+      // Explicitly String() cast to handle cases where phone is a number/undefined
+      const phoneInput = String(updatedData.phone || '');
+      const cleanedPhone = phoneInput.replace(/\D/g, '');
       const phoneValue = cleanedPhone === '' ? null : cleanedPhone;
+
+      const updatePayload: any = { 
+          id: user.id,
+          full_name: updatedData.name,
+          phone: phoneValue
+      };
+
+      if (updatedData.avatar) {
+          updatePayload.avatar_url = updatedData.avatar;
+      }
 
       const { error } = await supabase
           .from('profiles')
-          .upsert({ 
-              id: user.id,
-              full_name: updatedData.name,
-              phone: phoneValue
-          });
+          .upsert(updatePayload);
 
       if (error) throw error;
       await fetchProfile(user.id);
@@ -203,23 +211,34 @@ const App: React.FC = () => {
                   }) : [];
 
             // AUTO-CONFIRMATION LOGIC (Client-Side)
-            // If the DB hasn't updated yet or RLS prevents it, we calculate the status locally
-            // to ensure the UI reflects "Confirmed! Game On!" when conditions are met.
             let status = g.status || 'scheduled';
             let isTentative = g.is_tentative;
             let displayTime = g.time;
 
+            // 1. Force revert if players < 4 (Fix for "still showing confirmed")
+            if (status === 'confirmed' && players.length < 4) {
+                 status = 'scheduled';
+                 // If we revert to scheduled, we check if it should be tentative
+                 if (alternativeTimes.length > 0) {
+                     isTentative = true;
+                 }
+            }
+
+            // 2. Logic to upgrade to confirmed
             if (status !== 'confirmed') {
                 if (isTentative && alternativeTimes.length > 0) {
                      // Check voting
                      const voteCounts: Record<string, number> = {};
                      players.forEach((p: Player) => {
-                         if (p.voted_time) voteCounts[p.voted_time] = (voteCounts[p.voted_time] || 0) + 1;
+                         if (p.voted_time) {
+                             const t = p.voted_time.trim();
+                             voteCounts[t] = (voteCounts[t] || 0) + 1;
+                         }
                      });
 
                      const allTimes = [displayTime, ...alternativeTimes];
-                     // Dedupe just in case
-                     const candidates = [...new Set(allTimes)];
+                     // Dedupe and normalize
+                     const candidates = [...new Set(allTimes.map(t => t.trim()))];
 
                      for (const t of candidates) {
                          if ((voteCounts[t] || 0) >= 4) {
@@ -439,10 +458,13 @@ const App: React.FC = () => {
               // Voting Logic
               const voteCounts: Record<string, number> = {};
               participants.forEach((p: any) => {
-                  if (p.voted_time) voteCounts[p.voted_time] = (voteCounts[p.voted_time] || 0) + 1;
+                  if (p.voted_time) {
+                      const t = p.voted_time.trim();
+                      voteCounts[t] = (voteCounts[t] || 0) + 1;
+                  }
               });
 
-              const candidates = [...new Set([gameData.time, ...alternativeTimes])];
+              const candidates = [...new Set([gameData.time, ...alternativeTimes].map(t => t.trim()))];
               
               for (const t of candidates) {
                   if ((voteCounts[t] || 0) >= 4) {
@@ -479,6 +501,7 @@ const App: React.FC = () => {
     if (!user) return;
 
     try {
+      // 1. Fetch current participants to decide on transfer logic
       const { data: gameData, error: fetchError } = await supabase
         .from('games')
         .select(`*, game_participants (user_id, created_at)`)
@@ -487,33 +510,67 @@ const App: React.FC = () => {
 
       if (fetchError || !gameData) throw new Error("Could not fetch game data");
 
+      const participants = gameData.game_participants || [];
+      const currentCount = participants.length;
+
+      // 2. PRE-CHECK STATUS REVERT (Crucial: Update DB *before* removing participant to satisfy RLS)
+      // If the game is confirmed and the count is 4 or less, leaving makes it < 4, so we revert.
+      if (gameData.status === 'confirmed' && currentCount <= 4) {
+          let isTentative = false;
+          let hasAltTimes = false;
+          const altTimes = gameData.alternative_times;
+
+          if (Array.isArray(altTimes)) {
+              hasAltTimes = altTimes.length > 0;
+          } else if (typeof altTimes === 'string') {
+              // Basic check for non-empty JSON array string or comma separated
+              hasAltTimes = altTimes.includes('[') ? altTimes.length > 2 : altTimes.length > 0;
+          }
+
+          if (hasAltTimes) isTentative = true;
+
+          const { error: statusError } = await supabase
+            .from('games')
+            .update({ 
+                status: 'scheduled',
+                is_tentative: isTentative
+            })
+            .eq('id', gameId);
+          
+          if (statusError) console.error("Error reverting status:", statusError);
+      }
+
       const isCreator = gameData.creator_id === user.id;
 
       if (isCreator) {
-          const participants = gameData.game_participants || [];
+          // Sort by join time to find the next oldest player (Host is usually first)
           participants.sort((a: any, b: any) => 
             new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()
           );
 
-          const remainingPlayers = participants.filter((p: any) => p.user_id !== user.id);
+          // Find the first participant that is NOT the current user
+          const newOwner = participants.find((p: any) => p.user_id !== user.id);
 
-          if (remainingPlayers.length > 0) {
-              const newOwnerId = remainingPlayers[0].user_id;
-              try {
-                  const { error: updateError } = await supabase
-                      .from('games')
-                      .update({ creator_id: newOwnerId })
-                      .eq('id', gameId);
-                  if (updateError) console.warn("Soft Transfer skipped (RLS).");
-              } catch (transferErr) {
-                   console.warn("Soft Transfer Error", transferErr);
+          if (newOwner) {
+              // Transfer ownership
+              const { error: updateError } = await supabase
+                  .from('games')
+                  .update({ creator_id: newOwner.user_id })
+                  .eq('id', gameId);
+              
+              if (updateError) {
+                  // Fallback: If we can't transfer (e.g. RLS issues), we just log it and proceed to remove the participant.
+                  // This is better than blocking the user from leaving.
+                  console.warn("Soft Transfer failed (likely RLS), proceeding to leave:", updateError.message);
               }
           } else {
+              // No players left -> Delete game automatically
               await handleCancelGame(gameId);
               return;
           }
       }
 
+      // 3. Remove the player from participants list
       const { error } = await supabase
         .from('game_participants')
         .delete()
@@ -521,7 +578,7 @@ const App: React.FC = () => {
         .eq('user_id', user.id);
 
       if (error) throw error;
-      
+
       await fetchGames(true);
     } catch (error: any) {
       console.error("Error leaving game:", error.message);
@@ -532,8 +589,11 @@ const App: React.FC = () => {
   const handleCancelGame = async (gameId: string) => {
     if (!user) return;
     try {
+      // Delete participants first (cascade often handles this, but explicit is safer)
       await supabase.from('game_participants').delete().eq('game_id', gameId);
+      // Delete the game itself
       await supabase.from('games').delete().eq('id', gameId);
+      
       setGames(prevGames => prevGames.filter(g => g.id !== gameId));
       setViewMode('none');
       setSelectedGameId(null);

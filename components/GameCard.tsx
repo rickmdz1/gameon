@@ -15,7 +15,8 @@ const GameCard: React.FC<GameCardProps> = ({ game, isWeekend, onClick }) => {
   const playerTextColor = isWeekend ? 'text-blue-900' : 'text-slate-600';
   
   const hasAlternatives = game.alternative_times && game.alternative_times.length > 0;
-  const isVoting = game.is_tentative && hasAlternatives;
+  // Safety check: Don't show voting if game is already confirmed
+  const isVoting = game.status !== 'confirmed' && game.is_tentative && hasAlternatives;
   
   // Visually confirm if status is confirmed OR if it's a single-time game with 4+ players
   const isConfirmed = game.status === 'confirmed' || (!isVoting && game.players.length >= 4);

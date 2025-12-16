@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { format, isSameDay } from 'date-fns';
-import { X, Clock, MapPin, Trophy, Calendar as CalendarIcon, Check, LogOut, User as UserIcon, Sun, Cloud, CloudRain, CloudSun, Trash2, Loader2, Edit2, Save, StickyNote, MessageSquare, Plus, Vote, Mail, Lock, CheckCircle2, Users, AlertCircle, ThumbsUp, Phone } from 'lucide-react';
+import { X, Clock, MapPin, Trophy, Calendar as CalendarIcon, Check, LogOut, User as UserIcon, Sun, Cloud, CloudRain, CloudSun, Trash2, Loader2, Edit2, Save, StickyNote, MessageSquare, Plus, Vote, Mail, Lock, CheckCircle2, Users, AlertCircle, ThumbsUp, Phone, ArrowRightLeft, Camera, Eye, EyeOff } from 'lucide-react';
 import { Game, Player, WeatherForecast } from '../types';
 import { supabase } from '../supabaseClient';
 
@@ -162,7 +162,7 @@ export const NewGameModal: React.FC<NewGameModalProps> = ({ isOpen, onClose, dat
                 <button 
                     type="button" 
                     onClick={handleAddAltTime}
-                    className="text-xs font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1 mt-1"
+                    className="text-xs font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1"
                 >
                     <Plus className="w-3 h-3" /> Add Alternative Time
                 </button>
@@ -283,7 +283,7 @@ export const ViewGameModal: React.FC<ViewGameModalProps> = ({ isOpen, onClose, g
 
         {games.map((game) => {
             const hasAlternatives = game.alternative_times && game.alternative_times.length > 0;
-            const isVoting = game.is_tentative && hasAlternatives;
+            const isVoting = game.status !== 'confirmed' && game.is_tentative && hasAlternatives;
             const isConfirmed = game.status === 'confirmed' || (!isVoting && game.players.length >= 4);
             const showPlayerStatus = !isVoting && !isConfirmed;
             
@@ -418,13 +418,15 @@ export const GameDetailsModal: React.FC<GameDetailsModalProps> = ({ isOpen, onCl
 
     if (!game) return null;
 
-    // Determine Host based on first player in the list
-    const sortedPlayers = [...game.players]; 
-    const hostPlayer = sortedPlayers.length > 0 ? sortedPlayers[0] : null;
-    const isHost = currentUser && hostPlayer && hostPlayer.id === currentUser.id;
+    // Determine Host based on creatorId
+    const isHost = currentUser && game.creatorId === currentUser.id;
     const isJoined = currentUser && game.players.some(p => p.id === currentUser.id);
-    const canTransferOwnership = isHost && game.players.length >= 2;
-    const nextOwner = canTransferOwnership ? game.players.find(p => p.id !== currentUser?.id) : null;
+    
+    // For transferring ownership
+    const otherPlayers = game.players.filter(p => p.id !== currentUser?.id);
+    const nextOwner = otherPlayers.length > 0 ? otherPlayers[0] : null;
+    const canTransferOwnership = isHost && otherPlayers.length > 0;
+    
     const weather = weatherForecasts?.find(w => isSameDay(w.date, game.date));
 
     const WeatherIcon = ({ condition }: { condition: string }) => {
@@ -467,8 +469,11 @@ export const GameDetailsModal: React.FC<GameDetailsModalProps> = ({ isOpen, onCl
 
     const handleLeave = async () => {
         setLeaving(true);
-        await onLeave(game.id);
-        setLeaving(false);
+        try {
+            await onLeave(game.id);
+        } finally {
+            setLeaving(false);
+        }
     };
 
     // Helper functions for editing alt times
@@ -602,7 +607,7 @@ export const GameDetailsModal: React.FC<GameDetailsModalProps> = ({ isOpen, onCl
 
     const availableTimes = [game.time, ...(game.alternative_times || [])];
     const hasMultipleTimes = availableTimes.length > 1;
-    const showVoting = game.is_tentative && hasMultipleTimes;
+    const showVoting = game.status !== 'confirmed' && game.is_tentative && hasMultipleTimes;
 
     const votes = availableTimes.reduce((acc, t) => {
         acc[t] = game.players.filter(p => p.voted_time === t).length;
@@ -748,7 +753,7 @@ export const GameDetailsModal: React.FC<GameDetailsModalProps> = ({ isOpen, onCl
                             const isMe = currentUser && player.id === currentUser.id;
                             const message = player.note;
                             const vote = player.voted_time;
-                            const isPlayerHost = player.id === hostPlayer?.id;
+                            const isPlayerHost = player.id === game.creatorId;
                             
                             return (
                                 <div key={player.id} className="flex flex-col gap-1 p-2 hover:bg-slate-50 rounded-lg transition-colors border border-transparent hover:border-slate-100">
@@ -870,7 +875,7 @@ export const GameDetailsModal: React.FC<GameDetailsModalProps> = ({ isOpen, onCl
                     
                     {/* Host Actions */}
                     {isHost && (
-                        <div className="flex flex-col gap-2 mt-2">
+                        <div className="flex flex-col gap-2 mt-2 border-t border-slate-100 pt-3">
                             {canTransferOwnership && (
                                  <div className="flex flex-col gap-1">
                                     <button 
@@ -878,11 +883,11 @@ export const GameDetailsModal: React.FC<GameDetailsModalProps> = ({ isOpen, onCl
                                         disabled={leaving}
                                         className="w-full py-3 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold rounded-xl transition-colors flex items-center justify-center gap-2"
                                     >
-                                        {leaving ? <Loader2 className="w-4 h-4 animate-spin"/> : <LogOut className="w-4 h-4" />}
+                                        {leaving ? <Loader2 className="w-4 h-4 animate-spin"/> : <ArrowRightLeft className="w-4 h-4" />}
                                         Leave Game
                                     </button>
                                     <span className="text-[10px] text-slate-400 text-center">
-                                        Host will be transferred to {nextOwner?.name || 'next player'}
+                                        Host role will be transferred to {nextOwner?.name || 'the next player'}.
                                     </span>
                                 </div>
                             )}
@@ -894,6 +899,9 @@ export const GameDetailsModal: React.FC<GameDetailsModalProps> = ({ isOpen, onCl
                                 <Trash2 className="w-4 h-4" />
                                 Cancel Game
                             </button>
+                            <span className="text-[10px] text-slate-400 text-center -mt-1">
+                                Caution: This will remove the game for everyone.
+                            </span>
                         </div>
                     )}
 
@@ -914,49 +922,45 @@ export const GameDetailsModal: React.FC<GameDetailsModalProps> = ({ isOpen, onCl
     );
 };
 
-export const AuthModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
-  const [isSignUp, setIsSignUp] = useState(false);
+interface AuthModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  // New State for Signup fields
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
-  
+  const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
-
     try {
-      if (isSignUp) {
-        // Sanitize phone if provided
-        const cleanedPhone = phone.replace(/\D/g, '');
-        const phoneValue = cleanedPhone === '' ? null : cleanedPhone;
-        
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: {
-              full_name: name,
-              phone: phoneValue
+        if (isSignUp) {
+            const { data, error } = await supabase.auth.signUp({
+                email,
+                password,
+            });
+            if (error) throw error;
+            // Check if user needs to confirm email (session might be null)
+            if (data.user && !data.session) {
+                setSent(true);
+            } else {
+                onClose();
             }
-          }
-        });
-        if (error) throw error;
-        alert("If this is a new account, please check your email for a confirmation link.");
-        onClose();
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (error) throw error;
-        onClose();
-      }
+        } else {
+            const { error } = await supabase.auth.signInWithPassword({
+                email,
+                password,
+            });
+            if (error) throw error;
+            onClose();
+        }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -967,97 +971,82 @@ export const AuthModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
   if (!isOpen) return null;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={isSignUp ? "Join Game On!" : "Welcome Back"}>
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-        {error && (
-            <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg flex items-center gap-2">
-                <AlertCircle className="w-4 h-4" />
-                {error}
-            </div>
-        )}
-
-        {isSignUp && (
-            <div className="space-y-1 animate-in fade-in slide-in-from-top-2">
-                <label className="text-xs font-bold text-slate-500 uppercase">Full Name</label>
-                <div className="relative">
-                    <UserIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                    <input 
-                        type="text" 
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
-                        placeholder="John Doe"
-                        required
-                    />
-                </div>
-            </div>
-        )}
-
-        {isSignUp && (
-            <div className="space-y-1 animate-in fade-in slide-in-from-top-2">
-                <label className="text-xs font-bold text-slate-500 uppercase">Phone (Optional)</label>
-                <div className="relative">
-                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                    <input 
-                        type="tel" 
-                        value={phone}
-                        onChange={(e) => setPhone(e.target.value)}
-                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
-                        placeholder="For game notifications"
-                    />
-                </div>
-            </div>
-        )}
-        
-        <div className="space-y-1">
-            <label className="text-xs font-bold text-slate-500 uppercase">Email</label>
-            <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+    <Modal isOpen={isOpen} onClose={onClose} title={isSignUp ? "Create Account" : "Sign In"}>
+      {sent ? (
+        <div className="text-center py-6">
+           <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-4">
+             <Mail className="w-8 h-8" />
+           </div>
+           <h3 className="text-xl font-bold text-slate-800 mb-2">Verify your email</h3>
+           <p className="text-slate-500 mb-6">We sent a confirmation link to <strong>{email}</strong>.</p>
+           <button onClick={onClose} className="text-blue-600 font-bold hover:underline">Close</button>
+        </div>
+      ) : (
+        <form onSubmit={handleAuth} className="flex flex-col gap-4">
+          <p className="text-slate-500 text-sm mb-2">
+            {isSignUp ? "Join the community to start playing!" : "Welcome back! Enter your details."}
+          </p>
+          
+          {error && <div className="p-3 bg-red-50 text-red-600 text-sm rounded-xl border border-red-100">{error}</div>}
+          
+          <div className="space-y-1">
+             <label className="text-xs font-bold text-slate-500 uppercase">Email Address</label>
+             <div className="relative">
+                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input 
                     type="email" 
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
+                    className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:ring-2 focus:ring-blue-500 transition-all"
                     placeholder="you@example.com"
-                    required
+                    required 
                 />
-            </div>
-        </div>
+             </div>
+          </div>
 
-        <div className="space-y-1">
-            <label className="text-xs font-bold text-slate-500 uppercase">Password</label>
-            <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+          <div className="space-y-1">
+             <label className="text-xs font-bold text-slate-500 uppercase">Password</label>
+             <div className="relative">
+                <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input 
-                    type="password" 
+                    type={showPassword ? "text" : "password"} 
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
+                    className="w-full pl-10 pr-10 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:ring-2 focus:ring-blue-500 transition-all"
                     placeholder="••••••••"
-                    required
+                    required 
+                    minLength={6}
                 />
-            </div>
-        </div>
+                <button 
+                  type="button" 
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+             </div>
+          </div>
+          
+          <button 
+             type="submit" 
+             disabled={loading}
+             className="w-full py-3 bg-blue-900 hover:bg-blue-800 text-white font-bold rounded-xl shadow-lg mt-2 flex justify-center items-center gap-2 transition-transform active:scale-95"
+          >
+             {loading ? <Loader2 className="w-5 h-5 animate-spin"/> : (isSignUp ? 'Sign Up' : 'Sign In')}
+          </button>
 
-        <button 
-            type="submit" 
-            disabled={loading}
-            className="w-full py-3 bg-blue-900 text-white font-bold rounded-xl mt-2 hover:bg-blue-800 transition-colors flex justify-center items-center gap-2"
-        >
-            {loading ? <Loader2 className="w-5 h-5 animate-spin"/> : (isSignUp ? "Sign Up" : "Sign In")}
-        </button>
-
-        <div className="text-center text-sm text-slate-500 mt-2">
-            {isSignUp ? "Already have an account?" : "Don't have an account?"}
+          <div className="text-center mt-2">
+            <span className="text-slate-500 text-sm">{isSignUp ? "Already have an account? " : "Don't have an account? "}</span>
             <button 
                 type="button"
-                onClick={() => setIsSignUp(!isSignUp)}
-                className="ml-1 text-blue-600 font-bold hover:underline"
+                onClick={() => { setIsSignUp(!isSignUp); setError(null); }}
+                className="text-blue-600 font-bold hover:underline text-sm"
             >
                 {isSignUp ? "Sign In" : "Sign Up"}
             </button>
-        </div>
-      </form>
+          </div>
+        </form>
+      )}
     </Modal>
   );
 };
@@ -1066,77 +1055,156 @@ interface ProfileModalProps {
   isOpen: boolean;
   onClose: () => void;
   user: Player | null;
-  onUpdate: (data: { name: string; phone: string }) => Promise<void>;
+  onUpdate: (data: { name: string; phone: string; avatar?: string }) => Promise<void>;
 }
 
 export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, user, onUpdate }) => {
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [loading, setLoading] = useState(false);
+    const [name, setName] = useState('');
+    const [phone, setPhone] = useState('');
+    const [avatarUrl, setAvatarUrl] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [uploading, setUploading] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    if (user) {
-      setName(user.name);
-      setPhone(user.phone || '');
-    }
-  }, [user, isOpen]);
+    useEffect(() => {
+        if (user) {
+            setName(user.name);
+            setPhone(user.phone || '');
+            setAvatarUrl(user.avatar || '');
+        }
+    }, [user, isOpen]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    await onUpdate({ name, phone });
-    setLoading(false);
-    onClose();
-  };
+    const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        if (!event.target.files || event.target.files.length === 0) {
+            return;
+        }
+        
+        setUploading(true);
+        const file = event.target.files[0];
+        const fileExt = file.name.split('.').pop();
+        const fileName = `${user?.id}-${Math.random()}.${fileExt}`;
+        const filePath = `${fileName}`;
 
-  if (!isOpen) return null;
+        try {
+            // Attempt to upload to 'avatars' bucket
+            const { error: uploadError } = await supabase.storage
+                .from('avatars')
+                .upload(filePath, file);
 
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Edit Profile">
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-             <div className="flex justify-center mb-4">
-                 <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center text-blue-900 font-bold text-3xl border-4 border-white shadow-lg overflow-hidden">
-                     {user?.avatar ? (
-                         <img src={user.avatar} alt="Avatar" className="w-full h-full object-cover" />
-                     ) : (
-                         user?.name.charAt(0)
-                     )}
-                 </div>
-             </div>
+            if (uploadError) {
+                console.warn("Storage upload failed (likely bucket missing), falling back to Base64:", uploadError.message);
+                // Fallback: Read as Data URL
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    if (e.target?.result) {
+                        setAvatarUrl(e.target.result as string);
+                    }
+                };
+                reader.readAsDataURL(file);
+            } else {
+                 const { data } = supabase.storage.from('avatars').getPublicUrl(filePath);
+                 if (data) {
+                     setAvatarUrl(data.publicUrl);
+                 }
+            }
+        } catch (err) {
+             console.error("Upload error:", err);
+             // Safety fallback
+             const reader = new FileReader();
+             reader.onload = (e) => {
+                 if (e.target?.result) setAvatarUrl(e.target.result as string);
+             };
+             reader.readAsDataURL(file);
+        } finally {
+            setUploading(false);
+        }
+    };
 
-             <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-500 uppercase">Display Name</label>
-                <div className="relative">
-                    <UserIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                    <input 
-                        type="text" 
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
-                        required
-                    />
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setLoading(true);
+        const updateData = { 
+            name, 
+            phone, 
+            ...(avatarUrl ? { avatar: avatarUrl } : {}) 
+        };
+        await onUpdate(updateData);
+        setLoading(false);
+        onClose();
+    };
+
+    if (!isOpen) return null;
+
+    return (
+         <Modal isOpen={isOpen} onClose={onClose} title="Edit Profile">
+            <form onSubmit={handleSubmit} className="flex flex-col gap-6">
+                <div className="flex flex-col items-center gap-3">
+                    <div className="relative group cursor-pointer" onClick={() => fileInputRef.current?.click()}>
+                        <div className="w-24 h-24 bg-slate-200 rounded-full flex items-center justify-center overflow-hidden border-4 border-white shadow-md relative">
+                            {avatarUrl ? (
+                                <img src={avatarUrl} className="w-full h-full object-cover" alt="Avatar"/>
+                            ) : (
+                                <UserIcon className="w-12 h-12 text-slate-400" />
+                            )}
+                            {uploading && (
+                                <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
+                                    <Loader2 className="w-8 h-8 text-white animate-spin" />
+                                </div>
+                            )}
+                        </div>
+                        <div className="absolute bottom-0 right-0 bg-blue-900 text-white p-2 rounded-full border-2 border-white shadow-sm hover:bg-blue-800 transition-colors">
+                            <Camera className="w-4 h-4" />
+                        </div>
+                        <input 
+                            type="file" 
+                            ref={fileInputRef} 
+                            onChange={handleFileChange} 
+                            accept="image/*" 
+                            className="hidden" 
+                        />
+                    </div>
+                    <p className="text-xs text-slate-400 font-medium">Tap to change photo</p>
                 </div>
-            </div>
 
-            <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-500 uppercase">Phone (Optional)</label>
-                <input 
-                    type="tel" 
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
-                    placeholder="For game notifications"
-                />
-            </div>
+                <div className="space-y-4">
+                    <div className="space-y-1">
+                        <label className="text-xs font-bold text-slate-500 uppercase">Display Name</label>
+                        <div className="relative">
+                            <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                            <input 
+                                type="text" 
+                                value={name}
+                                onChange={(e) => setName(e.target.value)}
+                                className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:ring-2 focus:ring-blue-500 font-medium text-slate-800"
+                                required
+                            />
+                        </div>
+                    </div>
 
-            <button 
-                type="submit" 
-                disabled={loading}
-                className="w-full py-3 bg-blue-900 text-white font-bold rounded-xl mt-4 hover:bg-blue-800 transition-colors flex justify-center items-center gap-2"
-            >
-                {loading ? <Loader2 className="w-5 h-5 animate-spin"/> : "Save Changes"}
-            </button>
-        </form>
-    </Modal>
-  );
+                    <div className="space-y-1">
+                        <label className="text-xs font-bold text-slate-500 uppercase">Phone (Optional)</label>
+                        <div className="relative">
+                            <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                            <input 
+                                type="tel" 
+                                value={phone}
+                                onChange={(e) => setPhone(e.target.value)}
+                                className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:ring-2 focus:ring-blue-500 font-medium text-slate-800"
+                                placeholder="(555) 123-4567"
+                            />
+                        </div>
+                        <p className="text-[10px] text-slate-400 pl-1">Used for game notifications.</p>
+                    </div>
+                </div>
+
+                <button 
+                    type="submit" 
+                    disabled={loading || uploading}
+                    className="w-full py-4 bg-blue-900 text-white font-bold rounded-xl shadow-lg flex justify-center items-center gap-2 hover:bg-blue-800 transition-transform active:scale-95 disabled:opacity-50"
+                >
+                    {loading ? <Loader2 className="w-5 h-5 animate-spin"/> : 'Save Profile'}
+                </button>
+            </form>
+         </Modal>
+    );
 };
