@@ -952,9 +952,25 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                     }
                 }
             });
-            if (error) throw error;
+
+            if (error) {
+                // Handle already registered error by switching to sign in
+                if (error.message.toLowerCase().includes("registered") || error.message.toLowerCase().includes("user already exists")) {
+                    setIsSignUp(false);
+                    setError("This email is already registered. Please sign in.");
+                    return;
+                }
+                throw error;
+            }
+
             // Check if user needs to confirm email (session might be null)
             if (data.user && !data.session) {
+                // If identities is empty, it means the user already exists (Supabase security stub)
+                if (data.user.identities && data.user.identities.length === 0) {
+                     setIsSignUp(false);
+                     setError("This email is already registered. Please sign in.");
+                     return;
+                }
                 setSent(true);
             } else {
                 onClose();
@@ -993,7 +1009,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
             {isSignUp ? "Join the community to start playing!" : "Welcome back! Enter your details."}
           </p>
           
-          {error && <div className="p-3 bg-red-50 text-red-600 text-sm rounded-xl border border-red-100">{error}</div>}
+          {error && <div className="p-3 bg-red-50 text-red-600 text-sm rounded-xl border border-red-100 animate-in fade-in slide-in-from-top-1">{error}</div>}
           
           {isSignUp && (
              <div className="space-y-1 animate-in fade-in slide-in-from-top-2 duration-300">

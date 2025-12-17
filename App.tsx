@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { isSameDay } from 'date-fns';
+import { isSameDay, format } from 'date-fns';
 import Header from './components/Header';
 import MiniCalendar from './components/MiniCalendar';
 import WeatherWidget from './components/WeatherWidget';
@@ -34,24 +34,39 @@ const App: React.FC = () => {
     const checkUser = async () => {
       try {
         const { data: { session }, error } = await supabase.auth.getSession();
-        if (error) throw error;
+        
+        if (error) {
+            // Explicitly handle refresh token errors by clearing session
+            // This fixes "Invalid Refresh Token: Refresh Token Not Found" loops
+            if (error.message.includes("Refresh Token") || error.message.includes("refresh_token")) {
+                 console.warn("Stale session detected. Clearing.");
+                 await supabase.auth.signOut();
+                 setUser(null);
+                 return;
+            }
+            throw error;
+        }
         
         if (session?.user) {
           fetchProfile(session.user.id, session.user.user_metadata);
         } else {
           setUser(null);
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error("Auth check failed:", err);
+        // Ensure we are in a clean state if auth fails
+        setUser(null);
       }
     };
     checkUser();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session?.user) {
-        fetchProfile(session.user.id, session.user.user_metadata);
-      } else {
-        setUser(null);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+         setUser(null);
+         setGames([]); // Clear data on sign out
+      } else if (session?.user) {
+         // Only fetch profile if we don't have it or it changed (simple check)
+         fetchProfile(session.user.id, session.user.user_metadata);
       }
     });
 
@@ -64,6 +79,49 @@ const App: React.FC = () => {
       setViewMode('none');
     }
   }, [user, viewMode]);
+
+  // Automatic Cleanup of Past Games (Day Before and older)
+  useEffect(() => {
+    const cleanupOldGames = async () => {
+      try {
+        // Define "old" as strictly before today.
+        const todayStr = format(new Date(), 'yyyy-MM-dd');
+
+        // 1. Find old games
+        const { data: oldGames, error: fetchError } = await supabase
+          .from('games')
+          .select('id')
+          .lt('date', todayStr);
+
+        if (fetchError) throw fetchError;
+
+        if (oldGames && oldGames.length > 0) {
+            const gameIds = oldGames.map(g => g.id);
+            // console.log(`Auto-cleanup: Deleting ${gameIds.length} past games...`);
+
+            // 2. Delete participants first (manual cascade)
+            const { error: partError } = await supabase
+                .from('game_participants')
+                .delete()
+                .in('game_id', gameIds);
+            
+            if (partError) console.error("Error cleaning participants:", partError);
+
+            // 3. Delete games
+            const { error: gameError } = await supabase
+                .from('games')
+                .delete()
+                .in('id', gameIds);
+
+            if (gameError) throw gameError;
+        }
+      } catch (err) {
+        console.error("Auto-cleanup failed:", err);
+      }
+    };
+    
+    cleanupOldGames();
+  }, []);
 
   // Fetch Weather
   useEffect(() => {

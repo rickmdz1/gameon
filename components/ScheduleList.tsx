@@ -58,17 +58,17 @@ const ScheduleList: React.FC<ScheduleListProps> = ({ games, onScheduleNew, onGam
             const dayGames = games.filter((g) => isSameDay(g.date, date));
             const isDayWeekend = isWeekend(date);
             const dayName = format(date, 'EEEE'); 
-            const dayNumber = format(date, 'd'); 
+            const datePart = format(date, 'MMMM d'); 
 
             return (
               <div key={date.toString()} className="flex flex-col">
                 {/* Day Header */}
                 <div className="mb-4 flex items-baseline gap-2">
                    <h2 className={`text-3xl font-bold ${isDayWeekend ? 'text-blue-600' : 'text-slate-800'}`}>
-                      {dayName}
+                      {dayName},
                    </h2>
                    <span className={`text-3xl font-light ${isDayWeekend ? 'text-blue-400' : 'text-slate-400'}`}>
-                      {dayNumber}
+                      {datePart}
                    </span>
                    {isDayWeekend && <span className="text-sm font-normal text-slate-400 ml-2 bg-slate-100 px-2 py-1 rounded-full">Weekend Vibes</span>}
                 </div>
